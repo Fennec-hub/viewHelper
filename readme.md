@@ -1,7 +1,9 @@
-## clone
+Refactoring ThreeJS ViewHelper
+
+### clone
 
 `git clone https://github.com/Fennec-hub/viewHelper.git`
 
-## Install and run
+### Install and run
 
 `npm i && npm run dev`
