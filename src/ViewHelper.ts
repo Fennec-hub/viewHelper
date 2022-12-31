@@ -55,7 +55,9 @@ const mouseAngle = new Vector2();
 const dummy = new Object3D();
 let radius = 0;
 
-type DomPosition =
+type GizmoOrientation = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+
+type DomPlacement =
   | "top-left"
   | "top-right"
   | "top-center"
@@ -81,14 +83,14 @@ class ViewHelper extends Object3D {
   dragging: boolean = false;
   renderer: WebGLRenderer;
   controls?: OrbitControls | TrackballControls;
-  controlChangeEvent: { listener: () => void };
+  controlsChangeEvent: { listener: () => void };
   viewport: Vector4 = new Vector4();
   offsetHeight: number = 0;
 
   constructor(
     camera: PerspectiveCamera | OrthographicCamera,
     renderer: WebGLRenderer,
-    position: DomPosition = "bottom-right",
+    position: DomPlacement = "bottom-right",
     size: number = 128
   ) {
     super();
@@ -113,7 +115,7 @@ class ViewHelper extends Object3D {
     this.domRect = this.domContainer.getBoundingClientRect();
     this.startListening();
 
-    this.controlChangeEvent = { listener: () => this.updateOrientation() };
+    this.controlsChangeEvent = { listener: () => this.updateOrientation() };
 
     this.update();
     this.updateOrientation();
@@ -206,9 +208,7 @@ class ViewHelper extends Object3D {
 
     if (!object) return;
 
-    prepareAnimationData(this.camera, object, this.target);
-
-    this.animating = true;
+    this.setOrientation(object.userData.type);
   }
 
   handleHover(e: PointerEvent) {
@@ -234,7 +234,7 @@ class ViewHelper extends Object3D {
     if (this.controls) {
       this.controls.removeEventListener(
         "change",
-        this.controlChangeEvent.listener
+        this.controlsChangeEvent.listener
       );
       this.target = new Vector3();
     }
@@ -242,7 +242,7 @@ class ViewHelper extends Object3D {
     if (!controls) return;
 
     this.controls = controls;
-    controls.addEventListener("change", this.controlChangeEvent.listener);
+    controls.addEventListener("change", this.controlsChangeEvent.listener);
     this.target = controls.target;
   }
 
@@ -302,6 +302,11 @@ class ViewHelper extends Object3D {
     }
   }
 
+  setOrientation(orientation: GizmoOrientation) {
+    prepareAnimationData(this.camera, this.target, orientation);
+    this.animating = true;
+  }
+
   dispose() {
     this.axesLines.geometry.dispose();
     (this.axesLines.material as Material).dispose();
@@ -315,26 +320,33 @@ class ViewHelper extends Object3D {
     });
 
     this.domContainer.remove();
+
+    if (this.controls)
+      this.controls.removeEventListener(
+        "change",
+        this.controlsChangeEvent.listener
+      );
   }
 }
 
-function getDomContainer(placement: DomPosition, size: number) {
+function getDomContainer(placement: DomPlacement, size: number) {
   const div = document.createElement("div");
   const style = div.style;
+
+  style.height = `${size}px`;
+  style.width = `${size}px`;
+  style.borderRadius = "100%";
   style.position = "absolute";
 
   const [y, x] = placement.split("-");
 
   style.transform = "";
-  style.top = y === "top" ? "0" : y === "bottom" ? "" : "50%";
-  style.bottom = y === "bottom" ? "0" : "";
   style.left = x === "left" ? "0" : x === "center" ? "50%" : "";
   style.right = x === "right" ? "0" : "";
-  style.transform += y === "center" ? "translateY(-50%)" : "";
   style.transform += x === "center" ? "translateX(-50%)" : "";
-  style.height = `${size}px`;
-  style.width = `${size}px`;
-  style.borderRadius = "100%";
+  style.top = y === "top" ? "0" : y === "bottom" ? "" : "50%";
+  style.bottom = y === "bottom" ? "0" : "";
+  style.transform += y === "center" ? "translateY(-50%)" : "";
 
   return div;
 }
@@ -459,10 +471,10 @@ function getSpriteMaterial(color: Color, text: "x" | "y" | "z" | null = null) {
 
 function prepareAnimationData(
   camera: OrthographicCamera | PerspectiveCamera,
-  object: Object3D,
-  focusPoint: Vector3
+  focusPoint: Vector3,
+  axis: GizmoOrientation
 ) {
-  switch (object.userData.type) {
+  switch (axis) {
     case "+x":
       targetPosition.set(1, 0, 0);
       targetQuaternion.setFromEuler(new Euler(0, Math.PI * 0.5, 0));
