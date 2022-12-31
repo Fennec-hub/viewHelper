@@ -29,7 +29,6 @@ function init() {
   renderer = new WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.autoClear = false;
   document.body.appendChild(renderer.domElement);
 
   // scene
@@ -43,6 +42,7 @@ function init() {
     10000
   );
   camera.position.set(20, 20, 20);
+  camera.lookAt(0, 0, 0);
 
   // controls
   controls = new OrbitControls(camera, renderer.domElement);
@@ -74,16 +74,13 @@ function init() {
   scene.add(mesh);
 
   // helper
-  helper = new ViewHelper(camera, renderer, controls);
-  helper.update();
+  helper = new ViewHelper(camera, renderer, "top-right");
+  helper.setControls(controls);
 }
 
 function animate() {
   requestAnimationFrame(animate);
 
-  renderer.clear();
-
   renderer.render(scene, camera);
-
   helper.render();
 }

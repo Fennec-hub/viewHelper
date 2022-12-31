@@ -27,6 +27,7 @@ import {
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { TrackballControls } from "three/examples/jsm/controls/TrackballControls";
 
 const [POS_X, POS_Y, POS_Z, NEG_X, NEG_Y, NEG_Z] = Array(6)
   .fill(0)
@@ -44,7 +45,6 @@ const targetQuaternion = new Quaternion();
 const euler = new Euler();
 const q1 = new Quaternion();
 const q2 = new Quaternion();
-const viewport = new Vector4();
 const point = new Vector3();
 const dim = 128;
 const turnRate = 2 * Math.PI; // turn rate in angles per second
@@ -53,20 +53,25 @@ const mouse = new Vector2();
 const mouseStart = new Vector2();
 const mouseAngle = new Vector2();
 const dummy = new Object3D();
-const virtualSphere = new Object3D();
-const virtualCamera = new Object3D();
 let radius = 0;
 
-virtualSphere.add(virtualCamera);
-
-type DomPosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+type DomPosition =
+  | "top-left"
+  | "top-right"
+  | "top-center"
+  | "center-right"
+  | "center-left"
+  | "center-center"
+  | "bottom-left"
+  | "bottom-right"
+  | "bottom-center";
 
 class ViewHelper extends Object3D {
   camera: OrthographicCamera | PerspectiveCamera;
   orthoCamera = new OrthographicCamera(-1.8, 1.8, 1.8, -1.8, 0, 4);
   isViewHelper = true;
   animating = false;
-  center = new Vector3();
+  target = new Vector3();
   backgroundSphere: Mesh;
   axesLines: LineSegments;
   spritePoints: Sprite[];
@@ -75,12 +80,15 @@ class ViewHelper extends Object3D {
   domRect: DOMRect;
   dragging: boolean = false;
   renderer: WebGLRenderer;
+  controls?: OrbitControls | TrackballControls;
+  controlChangeEvent: { listener: () => void };
+  viewport: Vector4 = new Vector4();
+  offsetHeight: number = 0;
 
   constructor(
     camera: PerspectiveCamera | OrthographicCamera,
     renderer: WebGLRenderer,
-    controls: OrbitControls | null = null,
-    position: DomPosition = "bottomRight",
+    position: DomPosition = "bottom-right",
     size: number = 128
   ) {
     super();
@@ -97,20 +105,18 @@ class ViewHelper extends Object3D {
 
     this.add(this.backgroundSphere, this.axesLines, ...this.spritePoints);
 
-    this.domContainer = getDomEventContainer(position, size);
-    // FIXME
+    this.domContainer = getDomContainer(position, size);
+
     // This may cause confusion if the parent isn't the body and doesn't have a `position:relative`
     this.domElement.parentElement!.appendChild(this.domContainer);
 
     this.domRect = this.domContainer.getBoundingClientRect();
     this.startListening();
 
-    renderer.getViewport(viewport);
+    this.controlChangeEvent = { listener: () => this.updateOrientation() };
 
-    if (controls) {
-      controls.addEventListener("change", () => this.update());
-      this.center = controls.center ? controls.center : this.center;
-    }
+    this.update();
+    this.updateOrientation();
   }
 
   startListening() {
@@ -123,7 +129,7 @@ class ViewHelper extends Object3D {
     const drag = (e: PointerEvent) => {
       if (!this.dragging && isClick(e, mouseStart)) return;
       if (!this.dragging) {
-        resetSpritesColor(this.spritePoints);
+        resetSprites(this.spritePoints);
         this.dragging = true;
       }
 
@@ -140,15 +146,17 @@ class ViewHelper extends Object3D {
       this.rotation.y = rotationStart.y + mouseAngle.x;
       this.updateMatrixWorld();
 
-      virtualSphere.quaternion.copy(this.quaternion).invert();
+      q1.copy(this.quaternion).invert();
 
-      virtualSphere.updateMatrixWorld();
-      virtualCamera.updateMatrixWorld();
+      this.camera.position
+        .set(0, 0, 1)
+        .applyQuaternion(q1)
+        .multiplyScalar(radius)
+        .add(this.target);
 
-      virtualCamera.getWorldPosition(this.camera.position);
-      this.camera.lookAt(this.center);
+      this.camera.rotation.setFromQuaternion(q1);
 
-      this.update(false);
+      this.updateOrientation(false);
     };
     const endDrag = () => {
       document.removeEventListener("pointermove", drag, false);
@@ -159,7 +167,6 @@ class ViewHelper extends Object3D {
         return;
       }
 
-      this.update();
       this.dragging = false;
     };
 
@@ -168,8 +175,9 @@ class ViewHelper extends Object3D {
 
     mouseStart.set(e.clientX, e.clientY);
 
-    virtualCamera.position.copy(this.camera.position);
     const rotationStart = euler.copy(this.rotation);
+
+    setRadius(this.camera, this.target);
 
     document.addEventListener("pointermove", drag, false);
     document.addEventListener("pointerup", endDrag, false);
@@ -184,7 +192,7 @@ class ViewHelper extends Object3D {
   onPointerLeave() {
     if (this.dragging) return;
     (this.backgroundSphere.material as Material).opacity = 0;
-    resetSpritesColor(this.spritePoints);
+    resetSprites(this.spritePoints);
     this.domContainer.style.cursor = "";
   }
 
@@ -198,7 +206,7 @@ class ViewHelper extends Object3D {
 
     if (!object) return;
 
-    prepareAnimationData(this.camera, object, this.center);
+    prepareAnimationData(this.camera, object, this.target);
 
     this.animating = true;
   }
@@ -210,15 +218,32 @@ class ViewHelper extends Object3D {
       this.orthoCamera,
       this.spritePoints
     );
+
+    resetSprites(this.spritePoints);
+
     if (!object) {
       this.domContainer.style.cursor = "";
-      resetSpritesColor(this.spritePoints);
-      return;
+    } else {
+      object.material.map!.offset.x = 0.5;
+      object.scale.multiplyScalar(1.2);
+      this.domContainer.style.cursor = "pointer";
+    }
+  }
+
+  setControls(controls?: OrbitControls | TrackballControls) {
+    if (this.controls) {
+      this.controls.removeEventListener(
+        "change",
+        this.controlChangeEvent.listener
+      );
+      this.target = new Vector3();
     }
 
-    resetSpritesColor(this.spritePoints);
-    object.material.map!.offset.x = 0.5;
-    this.domContainer.style.cursor = "pointer";
+    if (!controls) return;
+
+    this.controls = controls;
+    controls.addEventListener("change", this.controlChangeEvent.listener);
+    this.target = controls.target;
   }
 
   render() {
@@ -226,23 +251,32 @@ class ViewHelper extends Object3D {
     if (this.animating) this.animate(delta);
 
     const x = this.domRect.left;
-    const y = this.domElement.offsetHeight - this.domRect.bottom;
+    const y = this.offsetHeight - this.domRect.bottom;
 
-    this.renderer.clearDepth();
+    const autoClear = this.renderer.autoClear;
+    this.renderer.autoClear = false;
     this.renderer.setViewport(x, y, dim, dim);
-
     this.renderer.render(this, this.orthoCamera);
-
-    this.renderer.setViewport(viewport);
+    this.renderer.setViewport(this.viewport);
+    this.renderer.autoClear = autoClear;
   }
 
-  update(fromCamera: boolean = true) {
+  updateOrientation(fromCamera: boolean = true) {
     if (fromCamera) {
       this.quaternion.copy(this.camera.quaternion).invert();
       this.updateMatrixWorld();
     }
 
-    setSpritesOpacity(this.spritePoints, this.camera);
+    updateSpritesOpacity(this.spritePoints, this.camera);
+  }
+
+  update() {
+    this.domRect = this.domContainer.getBoundingClientRect();
+    this.offsetHeight = this.domElement.offsetHeight;
+    setRadius(this.camera, this.target);
+    this.renderer.getViewport(this.viewport);
+
+    this.updateOrientation();
   }
 
   animate(delta: number) {
@@ -255,13 +289,13 @@ class ViewHelper extends Object3D {
       .set(0, 0, 1)
       .applyQuaternion(q1)
       .multiplyScalar(radius)
-      .add(this.center);
+      .add(this.target);
 
     // animate orientation
 
     this.camera.quaternion.rotateTowards(targetQuaternion, step);
 
-    this.update();
+    this.updateOrientation();
 
     if (q1.angleTo(q2) === 0) {
       this.animating = false;
@@ -284,34 +318,23 @@ class ViewHelper extends Object3D {
   }
 }
 
-function getDomEventContainer(position: DomPosition, size: number) {
+function getDomContainer(placement: DomPosition, size: number) {
   const div = document.createElement("div");
-  //div.id = "viewHelper";
-  div.style.position = "absolute";
+  const style = div.style;
+  style.position = "absolute";
 
-  switch (position) {
-    case "topLeft":
-      div.style.top = "0";
-      div.style.left = "0";
-      break;
-    case "topRight":
-      div.style.top = "0";
-      div.style.right = "0";
-      break;
-    case "bottomLeft":
-      div.style.bottom = "0";
-      div.style.left = "0";
-      break;
+  const [y, x] = placement.split("-");
 
-    default:
-      div.style.bottom = "0";
-      div.style.right = "0";
-      break;
-  }
-
-  div.style.height = `${size}px`;
-  div.style.width = `${size}px`;
-  div.style.borderRadius = "100%";
+  style.transform = "";
+  style.top = y === "top" ? "0" : y === "bottom" ? "" : "50%";
+  style.bottom = y === "bottom" ? "0" : "";
+  style.left = x === "left" ? "0" : x === "center" ? "50%" : "";
+  style.right = x === "right" ? "0" : "";
+  style.transform += y === "center" ? "translateY(-50%)" : "";
+  style.transform += x === "center" ? "translateX(-50%)" : "";
+  style.height = `${size}px`;
+  style.width = `${size}px`;
+  style.borderRadius = "100%";
 
   return div;
 }
@@ -376,12 +399,12 @@ function getBackgroundSphere() {
 }
 
 function getAxesSpritePoints() {
-  const axes = ["X", "Y", "Z"] as const;
+  const axes = ["x", "y", "z"] as const;
   return Array(6)
     .fill(0)
     .map((_, i) => {
       const isPositive = i < 3;
-      const sign = isPositive ? "pos" : "neg";
+      const sign = isPositive ? "+" : "-";
       const axis = axes[i % 3];
       const color = axesColors[i % 3];
 
@@ -390,15 +413,14 @@ function getAxesSpritePoints() {
       );
       sprite.userData.type = `${sign}${axis}`;
       sprite.scale.setScalar(isPositive ? 0.6 : 0.4);
-      sprite.position[axis.toLowerCase() as "x" | "y" | "z"] = isPositive
-        ? 1.2
-        : -1.2;
+      sprite.position[axis] = isPositive ? 1.2 : -1.2;
+      sprite.renderOrder = 1;
 
       return sprite;
     });
 }
 
-function getSpriteMaterial(color: Color, text: "X" | "Y" | "Z" | null = null) {
+function getSpriteMaterial(color: Color, text: "x" | "y" | "z" | null = null) {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
   canvas.height = 64;
@@ -420,15 +442,19 @@ function getSpriteMaterial(color: Color, text: "X" | "Y" | "Z" | null = null) {
     context.font = "bold 48px Arial";
     context.textAlign = "center";
     context.fillStyle = "#000";
-    context.fillText(text, 32, 48);
-    context.fillText(text, 96, 48);
+    context.fillText(text.toUpperCase(), 32, 48);
+    context.fillText(text.toUpperCase(), 96, 48);
   }
 
   const texture = new CanvasTexture(canvas);
   texture.wrapS = texture.wrapT = RepeatWrapping;
   texture.repeat.x = 0.5;
 
-  return new SpriteMaterial({ map: texture, toneMapped: false });
+  return new SpriteMaterial({
+    map: texture,
+    toneMapped: false,
+    transparent: true,
+  });
 }
 
 function prepareAnimationData(
@@ -437,32 +463,32 @@ function prepareAnimationData(
   focusPoint: Vector3
 ) {
   switch (object.userData.type) {
-    case "posX":
+    case "+x":
       targetPosition.set(1, 0, 0);
       targetQuaternion.setFromEuler(new Euler(0, Math.PI * 0.5, 0));
       break;
 
-    case "posY":
+    case "+y":
       targetPosition.set(0, 1, 0);
       targetQuaternion.setFromEuler(new Euler(-Math.PI * 0.5, 0, 0));
       break;
 
-    case "posZ":
+    case "+z":
       targetPosition.set(0, 0, 1);
       targetQuaternion.setFromEuler(new Euler());
       break;
 
-    case "negX":
+    case "-x":
       targetPosition.set(-1, 0, 0);
       targetQuaternion.setFromEuler(new Euler(0, -Math.PI * 0.5, 0));
       break;
 
-    case "negY":
+    case "-y":
       targetPosition.set(0, -1, 0);
       targetQuaternion.setFromEuler(new Euler(Math.PI * 0.5, 0, 0));
       break;
 
-    case "negZ":
+    case "-z":
       targetPosition.set(0, 0, -1);
       targetQuaternion.setFromEuler(new Euler(0, Math.PI, 0));
       break;
@@ -529,11 +555,18 @@ function getIntersectionObject(
   return intersection.object as Sprite;
 }
 
-function resetSpritesColor(sprites: Sprite[]) {
-  sprites.forEach((sprite) => (sprite.material.map!.offset.x = 1));
+function resetSprites(sprites: Sprite[]) {
+  let i = sprites.length;
+
+  while (i--) {
+    const scale = i < 3 ? 0.6 : 0.4;
+    sprites[i].scale.set(scale, scale, scale);
+    sprites[i].material.map!.offset.x = 1;
+  }
+  //sprites.forEach((sprite) => (sprite.material.map!.offset.x = 1));
 }
 
-function setSpritesOpacity(sprites: Sprite[], camera: Camera) {
+function updateSpritesOpacity(sprites: Sprite[], camera: Camera) {
   point.set(0, 0, 1);
   point.applyQuaternion(camera.quaternion);
 
