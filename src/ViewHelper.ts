@@ -90,7 +90,7 @@ class ViewHelper extends Object3D {
   constructor(
     camera: PerspectiveCamera | OrthographicCamera,
     renderer: WebGLRenderer,
-    position: DomPlacement = "bottom-right",
+    placement: DomPlacement = "bottom-right",
     size: number = 128
   ) {
     super();
@@ -107,7 +107,7 @@ class ViewHelper extends Object3D {
 
     this.add(this.backgroundSphere, this.axesLines, ...this.spritePoints);
 
-    this.domContainer = getDomContainer(position, size);
+    this.domContainer = getDomContainer(placement, size);
 
     // This may cause confusion if the parent isn't the body and doesn't have a `position:relative`
     this.domElement.parentElement!.appendChild(this.domContainer);
@@ -357,8 +357,8 @@ function getAxesLines() {
     .fill(0)
     .map((_, i) => [
       !i ? distance : 0,
-      i == 1 ? distance : 0,
-      i == 2 ? distance : 0,
+      i === 1 ? distance : 0,
+      i === 2 ? distance : 0,
       0,
       0,
       0,
